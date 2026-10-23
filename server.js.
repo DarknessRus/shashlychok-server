@@ -1,60 +1,130 @@
 
 const express = require("express");
+const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
-app.use(express.json({ limit: "50kb" }));
+const PORT = process.env.PORT || 3000;
+const ADMIN_KEY = process.env.ADMIN_KEY;
+
+app.use(cors());
+app.use(express.json({ limit: "2mb" }));
+
+const DATA_FILE = path.join(__dirname, "data.json");
+
+const defaultConfig = {
+  shopName: "ШашлычОК",
+  subtitle: "Вкусный шашлык с огня",
+  appearance: {
+    background: "#171717",
+    accent: "#ff7518",
+    text: "#ffffff",
+    bannerImage: "",
+    logoImage: ""
+  },
+  categories: [
+    {
+      id: "shashlyk",
+      name: "Шашлык",
+      items: [
+        {
+          id: "pork-neck",
+          name: "Шашлык из свиной шеи",
+          price: 0,
+          photo: "",
+          description: "",
+          available: true
+        },
+        {
+          id: "chicken",
+          name: "Шашлык из курицы",
+          price: 0,
+          photo: "",
+          description: "",
+          available: true
+        }
+      ]
+    }
+  ],
+  orderSettings: {
+    deliveryEnabled: true,
+    pickupEnabled: true,
+    preorderEnabled: true
+  }
+};
+
+function readConfig() {
+  try {
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(
+        DATA_FILE,
+        JSON.stringify(defaultConfig, null, 2),
+        "utf8"
+      );
+    }
+
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch (error) {
+    console.error("Ошибка чтения data.json:", error);
+    throw error;
+  }
+}
+
+function saveConfig(config) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(config, null, 2), "utf8");
+}
 
 app.get("/", (req, res) => {
-  res.send("🔥 Сервер заказов ШашлычОК работает!");
+  res.send("ШашлычОК: сервер работает");
 });
 
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", service: "shashlychok-server" });
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, service: "shashlychok-server" });
 });
 
-app.post("/api/order", async (req, res) => {
-  const order = req.body;
+app.get("/api/config", (req, res) => {
+  try {
+    res.set("Cache-Control", "no-store");
+    res.json(readConfig());
+  } catch (error) {
+    res.status(500).json({ error: "Не удалось загрузить настройки" });
+  }
+});
 
-  if (
-    !order ||
-    !Array.isArray(order.items) ||
-    order.items.length === 0
-  ) {
-    return res.status(400).json({
-      success: false,
-      error: "Корзина пуста"
+app.put("/api/config", (req, res) => {
+  if (!ADMIN_KEY) {
+    return res.status(503).json({
+      error: "Сначала настройте переменную ADMIN_KEY в Render"
     });
   }
 
-  const message = {
-    type: "order",
-    createdAt: new Date().toISOString(),
-    customer: {
-      phone: String(order.phone || "").slice(0, 40),
-      address: String(order.address || "").slice(0, 300)
-    },
-    method: String(order.method || "Не указан").slice(0, 40),
-    items: order.items.slice(0, 50).map(item => ({
-      name: String(item.name || "").slice(0, 100),
-      quantity: Math.max(
-        1,
-        Math.min(100, Number(item.quantity) || 1)
-      ),
-      price: Math.max(0, Number(item.price) || 0)
-    })),
-    note: String(order.note || "").slice(0, 500)
-  };
+  if (req.get("x-admin-key") !== ADMIN_KEY) {
+    return res.status(401).json({ error: "Неверный ключ администратора" });
+  }
 
-  console.log("Получен заказ:", JSON.stringify(message));
+  const config = req.body;
 
-  res.status(202).json({
-    success: true,
-    message: "Заказ принят сервером"
-  });
+  if (
+    !config ||
+    typeof config !== "object" ||
+    Array.isArray(config) ||
+    !Array.isArray(config.categories) ||
+    !config.appearance ||
+    !config.orderSettings
+  ) {
+    return res.status(400).json({ error: "Неверный формат настроек" });
+  }
+
+  try {
+    saveConfig(config);
+    res.json({ ok: true, message: "Настройки сохранены" });
+  } catch (error) {
+    console.error("Ошибка сохранения:", error);
+    res.status(500).json({ error: "Не удалось сохранить настройки" });
+  }
 });
 
-const port = process.env.PORT || 3000;
-
-app.listen(port, "0.0.0.0", () => {
-  console.log(`ShashlychOK server listening on ${port}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`ШашлычОК запущен на порту ${PORT}`);
 });
