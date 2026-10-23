@@ -92,6 +92,65 @@ app.get("/api/config", (req, res) => {
   }
 });
 
+app.post("/api/orders", async (req, res) => {
+  const token = process.env.VK_GROUP_TOKEN;
+  const peerId = process.env.VK_PEER_ID;
+  const message = req.body?.message;
+
+  if (!token || !peerId) {
+    return res.status(503).json({
+      ok: false,
+      error: "Сервер не настроен для ВКонтакте"
+    });
+  }
+
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: "Текст заказа отсутствует"
+    });
+  }
+
+  try {
+    const params = new URLSearchParams({
+      access_token: token,
+      v: "5.199",
+      peer_id: peerId,
+      random_id: String(Date.now() % 2147483647),
+      message: message.trim()
+    });
+
+    const response = await fetch(
+      "https://api.vk.com/method/messages.send",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: params
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || result.error || !result.response) {
+      console.error("Ошибка VK:", result.error || response.status);
+      return res.status(502).json({
+        ok: false,
+        error: "ВКонтакте не принял заказ"
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("Ошибка отправки:", error);
+    return res.status(502).json({
+      ok: false,
+      error: "Ошибка связи с ВКонтакте"
+    });
+  }
+});
+
 app.put("/api/config", (req, res) => {
   if (!ADMIN_KEY) {
     return res.status(503).json({
