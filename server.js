@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "100mb" }));
 
 const DATA_FILE = path.join(__dirname, "data.json");
 
