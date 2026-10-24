@@ -8,6 +8,130 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
+const VK_SERVICE_KEY = process.env.VK_SERVICE_KEY;
+const VK_GROUP_DOMAIN = process.env.VK_GROUP_DOMAIN || "shashlychok50";
+const VK_MENU_MARKER = (process.env.VK_MENU_MARKER || "#менюшашлычок").toLowerCase();
+let lastVkMenuSync = 0;
+let vkMenuSyncInProgress = false;
+
+function normalizeMenuText(value) {
+  return String(value || "")
+    .toLocaleLowerCase("ru")
+    .replace(/ё/g, "е")
+    .replace(/[^\\p{L}\\p{N}]/gu, "");
+}
+
+function parseVkMenu(text) {
+  const categories = [];
+  let current = null;
+
+  for (const rawLine of String(text || "").split(/\\r?\\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.toLowerCase().includes(VK_MENU_MARKER)) continue;
+
+    const bracketCategory = line.match(/^\\[([^\\]]+)\\]$/);
+    const colonCategory = line.match(/^([^:=|—–-]{2,50}):$/);
+    if (bracketCategory || colonCategory) {
+      const name = (bracketCategory || colonCategory)[1].trim();
+      if (name) {
+        current = { id: normalizeMenuText(name), name, items: [] };
+        categories.push(current);
+      }
+      continue;
+    }
+
+    const itemMatch = line.match(/^(.+?)\\s*(?:—|–|-|\\|)\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(?:₽|руб(?:лей|ля|ль)?\\.?|р\\.?)?$/i);
+    if (!itemMatch) continue;
+
+    const name = itemMatch[1].trim().replace(/^[•*\\-]+\\s*/, "");
+    const price = Math.round(Number(itemMatch[2].replace(",", ".")));
+    if (!name || !Number.isFinite(price) || price <= 0) continue;
+
+    if (!current) {
+      current = { id: "menu", name: "Меню", items: [] };
+      categories.push(current);
+    }
+    current.items.push({ name, price });
+  }
+
+  return categories.filter(category => category.items.length > 0);
+}
+
+async function syncMenuFromVk() {
+  if (!VK_SERVICE_KEY || vkMenuSyncInProgress || Date.now() - lastVkMenuSync < 60000) return;
+  vkMenuSyncInProgress = true;
+  try {
+    const params = new URLSearchParams({
+      access_token: VK_SERVICE_KEY,
+      v: "5.199",
+      domain: VK_GROUP_DOMAIN,
+      count: "30",
+      filter: "owner"
+    });
+    const response = await fetch("https://api.vk.com/method/wall.get?" + params.toString());
+    const result = await response.json();
+    if (!response.ok || result.error || !Array.isArray(result.response?.items)) {
+      console.error("VK menu read failed:", result.error || response.status);
+      return;
+    }
+
+    const post = result.response.items.find(item =>
+      String(item.text || "").toLowerCase().includes(VK_MENU_MARKER)
+    );
+    if (!post) {
+      console.warn("VK menu post not found. Expected marker:", VK_MENU_MARKER);
+      return;
+    }
+
+    const parsed = parseVkMenu(post.text);
+    if (!parsed.length) {
+      console.warn("VK menu post found, but no valid price lines were parsed");
+      return;
+    }
+
+    const config = readConfig();
+    const oldCategories = Array.isArray(config.categories) ? config.categories : [];
+    const nextCategories = parsed.map(category => {
+      const oldCategory = oldCategories.find(c =>
+        normalizeMenuText(c.name) === normalizeMenuText(category.name)
+      );
+      const oldItems = Array.isArray(oldCategory?.items) ? oldCategory.items : [];
+      return {
+        id: oldCategory?.id || category.id,
+        name: category.name,
+        items: category.items.map(item => {
+          const oldItem = oldItems.find(p =>
+            normalizeMenuText(p.name) === normalizeMenuText(item.name)
+          );
+          return {
+            ...(oldItem || {}),
+            id: oldItem?.id || normalizeMenuText(item.name),
+            name: item.name,
+            price: item.price,
+            photo: oldItem?.photo || "",
+            description: oldItem?.description || "",
+            available: oldItem?.available !== false
+          };
+        })
+      };
+    });
+
+    const before = JSON.stringify(oldCategories);
+    const after = JSON.stringify(nextCategories);
+    if (before !== after) {
+      config.categories = nextCategories;
+      config.vkMenuUpdatedAt = new Date().toISOString();
+      saveConfig(config);
+      console.log("Menu synchronized from VK post", post.id);
+    }
+    lastVkMenuSync = Date.now();
+  } catch (error) {
+    console.error("VK menu sync error:", error);
+  } finally {
+    vkMenuSyncInProgress = false;
+  }
+}
+
 app.use(cors());
 app.use(express.json({ limit: "100mb" }));
 
@@ -83,8 +207,9 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "shashlychok-server" });
 });
 
-app.get("/api/config", (req, res) => {
+app.get("/api/config", async (req, res) => {
   try {
+    await syncMenuFromVk();
     res.set("Cache-Control", "no-store");
     res.json(readConfig());
   } catch (error) {
