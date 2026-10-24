@@ -40,18 +40,19 @@ function parseVkMenu(text) {
       continue;
     }
 
-    const itemMatch = line.match(/^(.+?)\s*(?:—|–|-|\|)\s*(\d+(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:лей|ля|ль)?\.?|р\.?)?$/i);
+    const itemMatch = line.match(/^(.+?)\s*(?:—|–|-|\|)\s*(\d+(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:лей|ля|ль)?\.?|р\.?)?(?:\s*(?:\/|\()\s*(\d{2,4})\s*(?:г|гр|грамм(?:а|ов)?)(?:\))?)?$/i);
     if (!itemMatch) continue;
 
     const name = itemMatch[1].trim().replace(/^[•*\-]+\s*/, "");
     const price = Math.round(Number(itemMatch[2].replace(",", ".")));
+    const weight = Number(itemMatch[3] || 300);
     if (!name || !Number.isFinite(price) || price <= 0) continue;
 
     if (!current) {
       current = { id: "menu", name: "Меню", items: [] };
       categories.push(current);
     }
-    current.items.push({ name, price });
+    current.items.push({ name, price, weight });
   }
 
   return categories.filter(category => category.items.length > 0);
@@ -134,6 +135,7 @@ async function syncMenuFromVk() {
             id: oldItem?.id || normalizeMenuText(item.name),
             name: item.name,
             price: item.price,
+            weight: item.weight || oldItem?.weight || 300,
             photo: item.photo || oldItem?.photo || "",
             description: oldItem?.description || "",
             available: oldItem?.available !== false
