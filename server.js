@@ -164,7 +164,7 @@ async function syncMenuFromVk() {
           (Number(a.width || 0) * Number(a.height || 0))
         )[0]?.url || "";
         config.appearance = config.appearance || {};
-        if (cover && config.appearance.bannerImage !== cover) {
+        if (groupInfo.cover && config.appearance.bannerImage !== cover) {
           config.appearance.bannerImage = cover;
           appearanceChanged = true;
         }
@@ -176,7 +176,8 @@ async function syncMenuFromVk() {
           config.shopName = groupInfo.name;
           appearanceChanged = true;
         }
-        if (groupInfo.description && config.subtitle !== groupInfo.description) {
+        if (typeof groupInfo.description === "string" &&
+            config.subtitle !== groupInfo.description) {
           config.subtitle = groupInfo.description;
           appearanceChanged = true;
         }
