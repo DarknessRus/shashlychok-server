@@ -207,6 +207,64 @@ app.get("/api/health", (req, res) => {
   res.json({ ok: true, service: "shashlychok-server" });
 });
 
+// Exchanges a VK ID authorization code using PKCE. The app secret is not embedded in the APK.
+app.post("/api/auth/vk/exchange", async (req, res) => {
+  const code = String(req.body?.code || "").trim();
+  const deviceId = String(req.body?.device_id || "").trim();
+  const codeVerifier = String(req.body?.code_verifier || "").trim();
+
+  if (!code || !deviceId || !/^[A-Za-z0-9_-]{43,128}$/.test(codeVerifier)) {
+    return res.status(400).json({ ok: false, error: "Данные авторизации VK ID неполные или неверные" });
+  }
+
+  const clientId = "54850632";
+  const redirectUri = "vk54850632://vk.ru/blank.html";
+
+  try {
+    const params = new URLSearchParams({
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri,
+      client_id: clientId,
+      code_verifier: codeVerifier,
+      device_id: deviceId
+    });
+
+    const tokenResponse = await fetch("https://id.vk.ru/oauth2/auth?" + params.toString(), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ code })
+    });
+    const tokenResult = await tokenResponse.json();
+
+    if (!tokenResponse.ok || tokenResult.error || !tokenResult.access_token) {
+      console.error("VK ID code exchange failed:", tokenResult.error || tokenResponse.status);
+      return res.status(401).json({ ok: false, error: "ВКонтакте не подтвердил авторизацию. Проверь настройки VK ID." });
+    }
+
+    const userResponse = await fetch("https://id.vk.ru/oauth2/user_info?client_id=" + encodeURIComponent(clientId), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ access_token: tokenResult.access_token })
+    });
+    const userResult = await userResponse.json();
+
+    if (!userResponse.ok || userResult.error || !userResult.user_id) {
+      console.error("VK ID user info failed:", userResult.error || userResponse.status);
+      return res.status(502).json({ ok: false, error: "Вход подтверждён не полностью. Попробуй ещё раз." });
+    }
+
+    const name = [userResult.first_name, userResult.last_name].filter(Boolean).join(" ").trim();
+    return res.json({
+      ok: true,
+      user_id: String(userResult.user_id),
+      name
+    });
+  } catch (error) {
+    console.error("VK ID exchange request failed:", error);
+    return res.status(502).json({ ok: false, error: "Ошибка связи с сервисом VK ID" });
+  }
+});
+
 app.get("/api/config", async (req, res) => {
   try {
     await syncMenuFromVk();
