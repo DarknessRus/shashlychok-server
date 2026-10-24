@@ -89,6 +89,32 @@ async function syncMenuFromVk() {
       return;
     }
 
+    // Use post photos for products only when there is an unambiguous one-to-one match.
+    // VK attachments are returned in post order; when counts differ, keep the manually
+    // configured photos instead of assigning a potentially incorrect image.
+    const photoUrls = (post.attachments || [])
+      .filter(attachment => attachment.type === "photo" && attachment.photo)
+      .map(attachment => {
+        const sizes = attachment.photo.sizes || [];
+        const best = sizes.slice().sort((a, b) =>
+          (Number(b.width || 0) * Number(b.height || 0)) -
+          (Number(a.width || 0) * Number(a.height || 0))
+        )[0];
+        return best?.url || attachment.photo.photo_1280 ||
+          attachment.photo.photo_807 || attachment.photo.photo_604 || "";
+      })
+      .filter(Boolean);
+
+    const flatItems = parsed.flatMap(category => category.items);
+    if (photoUrls.length === flatItems.length) {
+      let photoIndex = 0;
+      for (const category of parsed) {
+        for (const item of category.items) {
+          item.photo = photoUrls[photoIndex++];
+        }
+      }
+    }
+
     const config = readConfig();
     const oldCategories = Array.isArray(config.categories) ? config.categories : [];
     const nextCategories = parsed.map(category => {
@@ -108,7 +134,7 @@ async function syncMenuFromVk() {
             id: oldItem?.id || normalizeMenuText(item.name),
             name: item.name,
             price: item.price,
-            photo: oldItem?.photo || "",
+            photo: item.photo || oldItem?.photo || "",
             description: oldItem?.description || "",
             available: oldItem?.available !== false
           };
@@ -116,13 +142,58 @@ async function syncMenuFromVk() {
       };
     });
 
+    let appearanceChanged = false;
+    // Read the community's public identity and cover where VK makes them available.
+    try {
+      const groupParams = new URLSearchParams({
+        access_token: VK_SERVICE_KEY,
+        v: "5.199",
+        group_ids: VK_GROUP_DOMAIN,
+        fields: "description,cover,photo_200"
+      });
+      const groupResponse = await fetch(
+        "https://api.vk.com/method/groups.getById?" + groupParams.toString()
+      );
+      const groupResult = await groupResponse.json();
+      const groupInfo = groupResult.response?.groups?.[0] ||
+        groupResult.response?.[0] || null;
+      if (groupResponse.ok && !groupResult.error && groupInfo) {
+        const coverSizes = groupInfo.cover?.images || [];
+        const cover = coverSizes.slice().sort((a, b) =>
+          (Number(b.width || 0) * Number(b.height || 0)) -
+          (Number(a.width || 0) * Number(a.height || 0))
+        )[0]?.url || "";
+        config.appearance = config.appearance || {};
+        if (cover && config.appearance.bannerImage !== cover) {
+          config.appearance.bannerImage = cover;
+          appearanceChanged = true;
+        }
+        if (groupInfo.photo_200 && config.appearance.logoImage !== groupInfo.photo_200) {
+          config.appearance.logoImage = groupInfo.photo_200;
+          appearanceChanged = true;
+        }
+        if (groupInfo.name && config.shopName !== groupInfo.name) {
+          config.shopName = groupInfo.name;
+          appearanceChanged = true;
+        }
+        if (groupInfo.description && config.subtitle !== groupInfo.description) {
+          config.subtitle = groupInfo.description;
+          appearanceChanged = true;
+        }
+      } else if (groupResult.error) {
+        console.warn("VK community appearance read failed:", groupResult.error);
+      }
+    } catch (error) {
+      console.warn("VK community appearance sync skipped:", error.message);
+    }
+
     const before = JSON.stringify(oldCategories);
     const after = JSON.stringify(nextCategories);
-    if (before !== after) {
+    if (before !== after || appearanceChanged) {
       config.categories = nextCategories;
       config.vkMenuUpdatedAt = new Date().toISOString();
       saveConfig(config);
-      console.log("Menu synchronized from VK post", post.id);
+      console.log("Menu/community appearance synchronized from VK post", post.id);
     }
     lastVkMenuSync = Date.now();
   } catch (error) {
