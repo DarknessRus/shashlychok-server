@@ -248,15 +248,17 @@ app.post("/api/auth/vk/exchange", async (req, res) => {
     });
     const userResult = await userResponse.json();
 
-    if (!userResponse.ok || userResult.error || !userResult.user_id) {
+    const user = userResult.user;
+
+    if (!userResponse.ok || userResult.error || !user?.user_id) {
       console.error("VK ID user info failed:", userResult.error || userResponse.status);
       return res.status(502).json({ ok: false, error: "Вход подтверждён не полностью. Попробуй ещё раз." });
     }
 
-    const name = [userResult.first_name, userResult.last_name].filter(Boolean).join(" ").trim();
+    const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
     return res.json({
       ok: true,
-      user_id: String(userResult.user_id),
+      user_id: String(user.user_id),
       name
     });
   } catch (error) {
