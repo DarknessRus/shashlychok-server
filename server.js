@@ -18,18 +18,18 @@ function normalizeMenuText(value) {
   return String(value || "")
     .toLocaleLowerCase("ru")
     .replace(/ё/g, "е")
-    .replace(/[^\\p{L}\\p{N}]/gu, "");
+    .replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 function parseVkMenu(text) {
   const categories = [];
   let current = null;
 
-  for (const rawLine of String(text || "").split(/\\r?\\n/)) {
+  for (const rawLine of String(text || "").split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || line.toLowerCase().includes(VK_MENU_MARKER)) continue;
 
-    const bracketCategory = line.match(/^\\[([^\\]]+)\\]$/);
+    const bracketCategory = line.match(/^\[([^\]]+)\]$/);
     const colonCategory = line.match(/^([^:=|—–-]{2,50}):$/);
     if (bracketCategory || colonCategory) {
       const name = (bracketCategory || colonCategory)[1].trim();
@@ -40,10 +40,10 @@ function parseVkMenu(text) {
       continue;
     }
 
-    const itemMatch = line.match(/^(.+?)\\s*(?:—|–|-|\\|)\\s*(\\d+(?:[.,]\\d{1,2})?)\\s*(?:₽|руб(?:лей|ля|ль)?\\.?|р\\.?)?$/i);
+    const itemMatch = line.match(/^(.+?)\s*(?:—|–|-|\|)\s*(\d+(?:[.,]\d{1,2})?)\s*(?:₽|руб(?:лей|ля|ль)?\.?|р\.?)?$/i);
     if (!itemMatch) continue;
 
-    const name = itemMatch[1].trim().replace(/^[•*\\-]+\\s*/, "");
+    const name = itemMatch[1].trim().replace(/^[•*\-]+\s*/, "");
     const price = Math.round(Number(itemMatch[2].replace(",", ".")));
     if (!name || !Number.isFinite(price) || price <= 0) continue;
 
