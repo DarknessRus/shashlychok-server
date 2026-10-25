@@ -453,14 +453,28 @@ app.get("/api/community", async (req, res) => {
   }
   communityContentLoading = true;
   try {
-    const token = VK_SERVICE_KEY || VK_MARKET_TOKEN || VK_GROUP_TOKEN;
-    if (!token) return res.status(503).json({ ok: false, error: "Не настроен ключ чтения ВК" });
+    const communityTokens = [VK_MARKET_TOKEN, VK_GROUP_TOKEN, VK_SERVICE_KEY]
+      .filter(Boolean)
+      .filter((token, index, all) => all.indexOf(token) === index);
+    if (!communityTokens.length) return res.status(503).json({ ok: false, error: "Не настроен ключ чтения ВК" });
     async function communityVkCall(method, values) {
-      const params = new URLSearchParams({ access_token: token, v: "5.199", ...values });
-      const response = await fetch("https://api.vk.com/method/" + method + "?" + params.toString());
-      const result = await response.json();
-      if (!response.ok || result.error) throw new Error(result.error?.error_msg || "VK API HTTP " + response.status);
-      return result.response;
+      let lastError = null;
+      for (const token of communityTokens) {
+        try {
+          const params = new URLSearchParams({ access_token: token, v: "5.199", ...values });
+          const response = await fetch("https://api.vk.com/method/" + method + "?" + params.toString());
+          const result = await response.json();
+          if (!response.ok || result.error) {
+            const error = result.error || { error_msg: "VK API HTTP " + response.status };
+            lastError = new Error(method + ": " + (error.error_msg || "неизвестная ошибка"));
+            continue;
+          }
+          return result.response;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError || new Error(method + ": ни один ключ ВК не сработал");
     }
     const groupData = await communityVkCall("groups.getById", { group_ids: VK_GROUP_DOMAIN, fields: "description,cover,photo_200,photo_400" });
     const group = groupData?.groups?.[0] || groupData?.[0] || {};
