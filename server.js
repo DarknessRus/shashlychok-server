@@ -188,7 +188,7 @@ async function syncMenuFromVk() {
       const candidates = posts
         .map(item => {
           const text = String(item.text || "").trim();
-          const товарыMatch = /(?<![\\p{L}\\p{N}])(?:меню|товары)(?![\\p{L}\\p{N}])/iu.test(text);
+          const товарыMatch = /(?<![\p{L}\p{N}])(?:меню|товары)(?![\p{L}\p{N}])/iu.test(text);
           return { item, товарыMatch };
         })
         .filter(candidate => candidate.товарыMatch);
