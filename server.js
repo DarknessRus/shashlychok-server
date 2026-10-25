@@ -394,8 +394,8 @@ app.post("/api/auth/vk/exchange", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Данные авторизации VK ID неполные или неверные" });
   }
 
-  const clientId = "54850632";
-  const redirectUri = "vk54850632://vk.ru/blank.html";
+  const clientId = "54850630";
+  const redirectUri = "vk54850630://vk.ru/blank.html";
 
   try {
     const params = new URLSearchParams({
