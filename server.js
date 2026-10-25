@@ -443,6 +443,93 @@ app.post("/api/auth/vk/exchange", async (req, res) => {
   }
 });
 
+
+// Public VK community content cache. This is separate from ordering/menu sync.
+let communityContentCache = { at: 0, data: null };
+let communityContentLoading = false;
+app.get("/api/community", async (req, res) => {
+  res.set("Cache-Control", "public, max-age=60");
+  if (communityContentCache.data && Date.now() - communityContentCache.at < 5 * 60 * 1000) {
+    return res.json({ ...communityContentCache.data, cached: true });
+  }
+  if (communityContentLoading) {
+    if (communityContentCache.data) return res.json({ ...communityContentCache.data, cached: true, refreshing: true });
+    return res.status(503).json({ ok: false, error: "Загрузка данных сообщества уже выполняется. Попробуйте через несколько секунд." });
+  }
+  communityContentLoading = true;
+  try {
+    const token = VK_SERVICE_KEY || VK_MARKET_TOKEN || VK_GROUP_TOKEN;
+    if (!token) return res.status(503).json({ ok: false, error: "Не настроен ключ чтения ВК" });
+    async function communityVkCall(method, values) {
+      const params = new URLSearchParams({ access_token: token, v: "5.199", ...values });
+      const response = await fetch("https://api.vk.com/method/" + method + "?" + params.toString());
+      const result = await response.json();
+      if (!response.ok || result.error) throw new Error(result.error?.error_msg || "VK API HTTP " + response.status);
+      return result.response;
+    }
+    const groupData = await communityVkCall("groups.getById", { group_ids: VK_GROUP_DOMAIN, fields: "description,cover,photo_200,photo_400" });
+    const group = groupData?.groups?.[0] || groupData?.[0] || {};
+    if (!group.id) throw new Error("Не удалось определить сообщество ВК");
+    const ownerId = "-" + group.id;
+    const results = await Promise.allSettled([
+      communityVkCall("wall.get", { owner_id: ownerId, count: "50", filter: "owner", extended: "0" }),
+      communityVkCall("photos.getAlbums", { owner_id: ownerId, count: "100", need_covers: "1", photo_sizes: "1" }),
+      communityVkCall("photos.get", { owner_id: ownerId, album_id: "wall", count: "100", rev: "1", photo_sizes: "1" })
+    ]);
+    const pickPhoto = photo => {
+      const sizes = Array.isArray(photo?.sizes) ? photo.sizes : [];
+      return sizes.slice().sort((a,b) => (Number(b.width||0)*Number(b.height||0)) - (Number(a.width||0)*Number(a.height||0)))[0]?.url
+        || photo?.photo_1280 || photo?.photo_807 || photo?.photo_604 || "";
+    };
+    const wallResponse = results[0].status === "fulfilled" ? results[0].value : null;
+    const albumsResponse = results[1].status === "fulfilled" ? results[1].value : null;
+    const photosResponse = results[2].status === "fulfilled" ? results[2].value : null;
+    const posts = (wallResponse?.items || []).map(post => ({
+      id: post.id,
+      date: post.date,
+      text: post.text || "",
+      url: "https://vk.ru/wall" + ownerId + "_" + post.id,
+      attachments: (post.attachments || []).map(a => {
+        if (a.type === "photo") return { type: "photo", url: pickPhoto(a.photo), text: a.photo?.text || "" };
+        if (a.type === "video") return { type: "video", url: "https://vk.ru/video" + (a.video?.owner_id || group.id) + "_" + a.video?.id, title: a.video?.title || "" };
+        if (a.type === "doc") return { type: "doc", url: a.doc?.url || "", title: a.doc?.title || "Документ" };
+        if (a.type === "link") return { type: "link", url: a.link?.url || "", title: a.link?.title || a.link?.url || "Ссылка" };
+        return { type: a.type || "other" };
+      })
+    }));
+    const photos = (photosResponse?.items || []).map(photo => ({
+      id: photo.id, date: photo.date, text: photo.text || "", url: pickPhoto(photo),
+      link: "https://vk.ru/photo" + ownerId + "_" + photo.id
+    })).filter(photo => photo.url);
+    const albums = (albumsResponse?.items || []).map(album => ({
+      id: album.id, title: album.title || "Фотоальбом", size: album.size || 0,
+      cover: album.thumb_src || pickPhoto(album), link: "https://vk.ru/album" + ownerId + "_" + album.id
+    }));
+    const coverSizes = group.cover?.images || [];
+    const cover = coverSizes.slice().sort((a,b) => (Number(b.width||0)*Number(b.height||0)) - (Number(a.width||0)*Number(a.height||0)))[0]?.url || "";
+    const data = {
+      ok: true,
+      group: { id: group.id, name: group.name || "ШашлычОК", description: group.description || "",
+        avatar: group.photo_400 || group.photo_200 || "", cover },
+      posts, photos, albums,
+      unavailable: {
+        wall: results[0].status === "rejected" ? String(results[0].reason?.message || results[0].reason) : "",
+        albums: results[1].status === "rejected" ? String(results[1].reason?.message || results[1].reason) : "",
+        photos: results[2].status === "rejected" ? String(results[2].reason?.message || results[2].reason) : ""
+      },
+      updatedAt: new Date().toISOString()
+    };
+    communityContentCache = { at: Date.now(), data };
+    return res.json(data);
+  } catch (error) {
+    console.error("VK community content sync failed:", error.message || error);
+    if (communityContentCache.data) return res.json({ ...communityContentCache.data, cached: true, refreshError: String(error.message || error) });
+    return res.status(502).json({ ok: false, error: "Не удалось загрузить содержимое ВК: " + String(error.message || error) });
+  } finally {
+    communityContentLoading = false;
+  }
+});
+
 app.get("/api/config", async (req, res) => {
   try {
     await syncMenuFromVk();
