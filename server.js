@@ -448,13 +448,9 @@ app.post("/api/auth/vk/exchange", async (req, res) => {
 let communityContentCache = { at: 0, data: null };
 let communityContentLoading = false;
 app.get("/api/community", async (req, res) => {
-  res.set("Cache-Control", "public, max-age=60");
-  if (!req.query.refresh && communityContentCache.data && Date.now() - communityContentCache.at < 5 * 60 * 1000) {
-    return res.json({ ...communityContentCache.data, cached: true });
-  }
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   if (communityContentLoading) {
-    if (communityContentCache.data) return res.json({ ...communityContentCache.data, cached: true, refreshing: true });
-    return res.status(503).json({ ok: false, error: "Загрузка данных сообщества уже выполняется. Попробуйте через несколько секунд." });
+    return res.status(503).json({ ok: false, error: "Обновление данных ВК уже выполняется. Попробуйте через несколько секунд." });
   }
   communityContentLoading = true;
   try {
@@ -523,8 +519,7 @@ app.get("/api/community", async (req, res) => {
     return res.json(data);
   } catch (error) {
     console.error("VK community content sync failed:", error.message || error);
-    if (communityContentCache.data) return res.json({ ...communityContentCache.data, cached: true, refreshError: String(error.message || error) });
-    return res.status(502).json({ ok: false, error: "Не удалось загрузить содержимое ВК: " + String(error.message || error) });
+    return res.status(502).json({ ok: false, error: "Не удалось получить актуальное содержимое ВК. Старые данные не подставлены: " + String(error.message || error) });
   } finally {
     communityContentLoading = false;
   }
