@@ -62,145 +62,207 @@ async function syncMenuFromVk() {
   if (!VK_SERVICE_KEY || vkMenuSyncInProgress || Date.now() - lastVkMenuSync < 60000) return;
   vkMenuSyncInProgress = true;
   try {
-    const params = new URLSearchParams({
-      access_token: VK_SERVICE_KEY,
-      v: "5.199",
-      domain: VK_GROUP_DOMAIN,
-      count: "30",
-      filter: "owner"
+    async function vkCall(method, values) {
+      const params = new URLSearchParams({
+        access_token: VK_SERVICE_KEY,
+        v: "5.199",
+        ...values
+      });
+      const response = await fetch("https://api.vk.com/method/" + method + "?" + params.toString());
+      const result = await response.json();
+      if (!response.ok || result.error) {
+        const error = result.error || { error_msg: "HTTP " + response.status };
+        console.error("VK API " + method + " failed:", error);
+        throw new Error(method + ": " + (error.error_msg || JSON.stringify(error)));
+      }
+      return result.response;
+    }
+
+    // Resolve the community ID from its short address first.
+    const groupData = await vkCall("groups.getById", {
+      group_ids: VK_GROUP_DOMAIN,
+      fields: "description,cover,photo_200"
     });
-    const response = await fetch("https://api.vk.com/method/wall.get?" + params.toString());
-    const result = await response.json();
-    if (!response.ok || result.error || !Array.isArray(result.response?.items)) {
-      console.error("VK menu read failed:", result.error || response.status);
-      return;
-    }
+    const groupInfo = groupData?.groups?.[0] || groupData?.[0];
+    if (!groupInfo?.id) throw new Error("VK community not found: " + VK_GROUP_DOMAIN);
+    const groupId = String(groupInfo.id);
 
-    const post = result.response.items.find(item =>
-      String(item.text || "").toLowerCase().includes(VK_MENU_MARKER)
-    );
-    if (!post) {
-      console.warn("VK menu post not found. Expected marker:", VK_MENU_MARKER);
-      return;
-    }
+    let parsed = [];
+    let source = "";
+    try {
+      // The community's Market section is the primary source of menu data.
+      const marketData = await vkCall("market.get", {
+        owner_id: "-" + groupId,
+        count: "200",
+        offset: "0",
+        extended: "1"
+      });
+      const marketItems = Array.isArray(marketData?.items) ? marketData.items : [];
+      const byCategory = new Map();
 
-    const parsed = parseVkMenu(post.text);
-    if (!parsed.length) {
-      console.warn("VK menu post found, but no valid price lines were parsed");
-      return;
-    }
+      for (const product of marketItems) {
+        const name = String(product.title || "").trim();
+        if (!name) continue;
 
-    // Use post photos for products only when there is an unambiguous one-to-one match.
-    // VK attachments are returned in post order; when counts differ, keep the manually
-    // configured photos instead of assigning a potentially incorrect image.
-    const photoUrls = (post.attachments || [])
-      .filter(attachment => attachment.type === "photo" && attachment.photo)
-      .map(attachment => {
-        const sizes = attachment.photo.sizes || [];
-        const best = sizes.slice().sort((a, b) =>
+        const priceObject = product.price || {};
+        const priceText = String(priceObject.text || "");
+        let price = 0;
+        // Prefer VK's formatted price. Fall back to amount in thousandths of currency.
+        const textMatch = priceText.replace(/\u00a0/g, " ").match(/[\d\s]+(?:[.,]\d{1,2})?/);
+        if (textMatch) {
+          price = Math.round(Number(textMatch[0].replace(/\s/g, "").replace(",", ".")));
+        }
+        if (!(price > 0) && priceObject.amount != null) {
+          const amount = Number(priceObject.amount);
+          if (Number.isFinite(amount) && amount > 0) price = Math.round(amount / 1000);
+        }
+        if (!(price > 0)) {
+          console.warn("VK market item skipped because its price could not be read:", name);
+          continue;
+        }
+
+        const categoryName = String(product.category?.name || "Меню").trim() || "Меню";
+        if (!byCategory.has(categoryName)) {
+          byCategory.set(categoryName, {
+            id: normalizeMenuText(categoryName) || "menu",
+            name: categoryName,
+            items: []
+          });
+        }
+
+        const photos = Array.isArray(product.photos) ? product.photos : [];
+        const photoCandidates = photos.flatMap(photo => Array.isArray(photo.sizes) ? photo.sizes : []);
+        const bestPhoto = photoCandidates.slice().sort((a, b) =>
           (Number(b.width || 0) * Number(b.height || 0)) -
           (Number(a.width || 0) * Number(a.height || 0))
         )[0];
-        return best?.url || attachment.photo.photo_1280 ||
-          attachment.photo.photo_807 || attachment.photo.photo_604 || "";
-      })
-      .filter(Boolean);
+        const photo = bestPhoto?.url || product.thumb_photo || "";
 
-    const flatItems = parsed.flatMap(category => category.items);
-    if (photoUrls.length === flatItems.length) {
-      let photoIndex = 0;
-      for (const category of parsed) {
-        for (const item of category.items) {
-          item.photo = photoUrls[photoIndex++];
+        const description = String(product.description || "").trim();
+        const weightMatch = (name + " " + description).match(/(\d{2,4})\s*(?:г|гр|грамм)/i);
+        byCategory.get(categoryName).items.push({
+          name,
+          price,
+          weight: Number(weightMatch?.[1] || 300),
+          photo,
+          description
+        });
+      }
+
+      parsed = Array.from(byCategory.values()).filter(category => category.items.length);
+      if (parsed.length) source = "market";
+    } catch (error) {
+      console.warn("VK Market sync unavailable; trying marked wall post:", error.message);
+    }
+
+    // Backward-compatible fallback for communities that still keep a text menu on the wall.
+    if (!parsed.length) {
+      const wallData = await vkCall("wall.get", {
+        domain: VK_GROUP_DOMAIN,
+        count: "50",
+        filter: "owner"
+      });
+      const posts = Array.isArray(wallData?.items) ? wallData.items : [];
+      const post = posts.find(item =>
+        String(item.text || "").toLowerCase().includes(VK_MENU_MARKER)
+      );
+      if (post) {
+        parsed = parseVkMenu(post.text);
+        if (parsed.length) {
+          const photoUrls = (post.attachments || [])
+            .filter(attachment => attachment.type === "photo" && attachment.photo)
+            .map(attachment => {
+              const sizes = attachment.photo.sizes || [];
+              const best = sizes.slice().sort((a, b) =>
+                (Number(b.width || 0) * Number(b.height || 0)) -
+                (Number(a.width || 0) * Number(a.height || 0))
+              )[0];
+              return best?.url || attachment.photo.photo_1280 ||
+                attachment.photo.photo_807 || attachment.photo.photo_604 || "";
+            })
+            .filter(Boolean);
+          const flatItems = parsed.flatMap(category => category.items);
+          if (photoUrls.length === flatItems.length) {
+            let photoIndex = 0;
+            for (const category of parsed) {
+              for (const item of category.items) item.photo = photoUrls[photoIndex++];
+            }
+          }
+          source = "wall";
         }
       }
     }
 
     const config = readConfig();
     const oldCategories = Array.isArray(config.categories) ? config.categories : [];
-    const nextCategories = parsed.map(category => {
-      const oldCategory = oldCategories.find(c =>
-        normalizeMenuText(c.name) === normalizeMenuText(category.name)
-      );
-      const oldItems = Array.isArray(oldCategory?.items) ? oldCategory.items : [];
-      return {
-        id: oldCategory?.id || category.id,
-        name: category.name,
-        items: category.items.map(item => {
-          const oldItem = oldItems.find(p =>
-            normalizeMenuText(p.name) === normalizeMenuText(item.name)
-          );
-          return {
-            ...(oldItem || {}),
-            id: oldItem?.id || normalizeMenuText(item.name),
-            name: item.name,
-            price: item.price,
-            weight: item.weight || oldItem?.weight || 300,
-            photo: item.photo || oldItem?.photo || "",
-            description: oldItem?.description || "",
-            available: oldItem?.available !== false
-          };
-        })
-      };
-    });
 
-    let appearanceChanged = false;
-    // Read the community's public identity and cover where VK makes them available.
-    try {
-      const groupParams = new URLSearchParams({
-        access_token: VK_SERVICE_KEY,
-        v: "5.199",
-        group_ids: VK_GROUP_DOMAIN,
-        fields: "description,cover,photo_200"
+    // Do not erase the existing menu if VK returns no products or an API permission error.
+    if (parsed.length) {
+      const nextCategories = parsed.map(category => {
+        const oldCategory = oldCategories.find(c =>
+          normalizeMenuText(c.name) === normalizeMenuText(category.name)
+        );
+        const oldItems = Array.isArray(oldCategory?.items) ? oldCategory.items : [];
+        return {
+          id: oldCategory?.id || category.id,
+          name: category.name,
+          items: category.items.map(item => {
+            const oldItem = oldItems.find(p =>
+              normalizeMenuText(p.name) === normalizeMenuText(item.name)
+            );
+            return {
+              ...(oldItem || {}),
+              id: oldItem?.id || normalizeMenuText(item.name),
+              name: item.name,
+              price: item.price,
+              weight: item.weight || oldItem?.weight || 300,
+              photo: item.photo || oldItem?.photo || "",
+              description: item.description || oldItem?.description || "",
+              available: oldItem?.available !== false
+            };
+          })
+        };
       });
-      const groupResponse = await fetch(
-        "https://api.vk.com/method/groups.getById?" + groupParams.toString()
-      );
-      const groupResult = await groupResponse.json();
-      const groupInfo = groupResult.response?.groups?.[0] ||
-        groupResult.response?.[0] || null;
-      if (groupResponse.ok && !groupResult.error && groupInfo) {
-        const coverSizes = groupInfo.cover?.images || [];
-        const cover = coverSizes.slice().sort((a, b) =>
-          (Number(b.width || 0) * Number(b.height || 0)) -
-          (Number(a.width || 0) * Number(a.height || 0))
-        )[0]?.url || "";
-        config.appearance = config.appearance || {};
-        if (groupInfo.cover && config.appearance.bannerImage !== cover) {
-          config.appearance.bannerImage = cover;
-          appearanceChanged = true;
-        }
-        if (groupInfo.photo_200 && config.appearance.logoImage !== groupInfo.photo_200) {
-          config.appearance.logoImage = groupInfo.photo_200;
-          appearanceChanged = true;
-        }
-        if (groupInfo.name && config.shopName !== groupInfo.name) {
-          config.shopName = groupInfo.name;
-          appearanceChanged = true;
-        }
-        if (typeof groupInfo.description === "string" &&
-            config.subtitle !== groupInfo.description) {
-          config.subtitle = groupInfo.description;
-          appearanceChanged = true;
-        }
-      } else if (groupResult.error) {
-        console.warn("VK community appearance read failed:", groupResult.error);
+      if (JSON.stringify(oldCategories) !== JSON.stringify(nextCategories)) {
+        config.categories = nextCategories;
+        config.vkMenuUpdatedAt = new Date().toISOString();
+        config.vkMenuSource = source;
+        saveConfig(config);
+        console.log("Menu synchronized from VK " + source, groupId);
       }
-    } catch (error) {
-      console.warn("VK community appearance sync skipped:", error.message);
+    } else {
+      console.warn("No readable VK Market products or marked wall menu; existing menu preserved.");
     }
 
-    const before = JSON.stringify(oldCategories);
-    const after = JSON.stringify(nextCategories);
-    if (before !== after || appearanceChanged) {
-      config.categories = nextCategories;
-      config.vkMenuUpdatedAt = new Date().toISOString();
-      saveConfig(config);
-      console.log("Menu/community appearance synchronized from VK post", post.id);
+    // Synchronize community identity and visual elements when provided by VK.
+    let appearanceChanged = false;
+    const coverSizes = groupInfo.cover?.images || [];
+    const cover = coverSizes.slice().sort((a, b) =>
+      (Number(b.width || 0) * Number(b.height || 0)) -
+      (Number(a.width || 0) * Number(a.height || 0))
+    )[0]?.url || "";
+    config.appearance = config.appearance || {};
+    if (cover && config.appearance.bannerImage !== cover) {
+      config.appearance.bannerImage = cover;
+      appearanceChanged = true;
     }
+    if (groupInfo.photo_200 && config.appearance.logoImage !== groupInfo.photo_200) {
+      config.appearance.logoImage = groupInfo.photo_200;
+      appearanceChanged = true;
+    }
+    if (groupInfo.name && config.shopName !== groupInfo.name) {
+      config.shopName = groupInfo.name;
+      appearanceChanged = true;
+    }
+    if (typeof groupInfo.description === "string" && config.subtitle !== groupInfo.description) {
+      config.subtitle = groupInfo.description;
+      appearanceChanged = true;
+    }
+    if (appearanceChanged) saveConfig(config);
+
     lastVkMenuSync = Date.now();
   } catch (error) {
-    console.error("VK menu sync error:", error);
+    console.error("VK menu sync error:", error.message || error);
   } finally {
     vkMenuSyncInProgress = false;
   }
