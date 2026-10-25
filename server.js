@@ -472,7 +472,7 @@ app.get("/api/community", async (req, res) => {
     if (!group.id) throw new Error("Не удалось определить сообщество ВК");
     const ownerId = "-" + group.id;
     const results = await Promise.allSettled([
-      communityVkCall("wall.get", { owner_id: ownerId, count: "50", filter: "owner", extended: "0" }),
+      communityVkCall("wall.get", { owner_id: ownerId, count: "100", filter: "owner", extended: "0" }),
       communityVkCall("photos.getAlbums", { owner_id: ownerId, count: "100", need_covers: "1", photo_sizes: "1" }),
       communityVkCall("photos.get", { owner_id: ownerId, album_id: "wall", count: "100", rev: "1", photo_sizes: "1" })
     ]);
