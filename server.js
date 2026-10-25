@@ -9,6 +9,8 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
 const VK_SERVICE_KEY = process.env.VK_SERVICE_KEY;
+const VK_MARKET_TOKEN = process.env.VK_MARKET_TOKEN;
+const VK_GROUP_TOKEN = process.env.VK_GROUP_TOKEN;
 const VK_GROUP_DOMAIN = process.env.VK_GROUP_DOMAIN || "shashlychok50";
 const VK_MENU_MARKER = (process.env.VK_MENU_MARKER || "#менюшашлычок").toLowerCase();
 let lastVkMenuSync = 0;
@@ -62,9 +64,9 @@ async function syncMenuFromVk() {
   if (!VK_SERVICE_KEY || vkMenuSyncInProgress || Date.now() - lastVkMenuSync < 60000) return;
   vkMenuSyncInProgress = true;
   try {
-    async function vkCall(method, values) {
+    async function vkCall(method, values, token = VK_SERVICE_KEY) {
       const params = new URLSearchParams({
-        access_token: VK_SERVICE_KEY,
+        access_token: token,
         v: "5.199",
         ...values
       });
@@ -91,12 +93,30 @@ async function syncMenuFromVk() {
     let source = "";
     try {
       // The community's Market section is the primary source of menu data.
-      const marketData = await vkCall("market.get", {
+      const marketParams = {
         owner_id: "-" + groupId,
         count: "200",
         offset: "0",
         extended: "1"
-      });
+      };
+      // market.get is not available with a VK service key. Prefer a dedicated
+      // user access token with market permission; try the community token as a
+      // compatibility fallback, then the legacy service key.
+      const marketTokens = [VK_MARKET_TOKEN, VK_GROUP_TOKEN, VK_SERVICE_KEY]
+        .filter(Boolean)
+        .filter((token, index, all) => all.indexOf(token) === index);
+      let marketData = null;
+      let lastMarketError = null;
+      for (const token of marketTokens) {
+        try {
+          marketData = await vkCall("market.get", marketParams, token);
+          break;
+        } catch (error) {
+          lastMarketError = error;
+          console.warn("VK market.get attempt failed; trying another configured token.");
+        }
+      }
+      if (!marketData) throw lastMarketError || new Error("No VK market token configured.");
       const marketItems = Array.isArray(marketData?.items) ? marketData.items : [];
       const byCategory = new Map();
 
