@@ -183,9 +183,17 @@ async function syncMenuFromVk() {
         filter: "owner"
       });
       const posts = Array.isArray(wallData?.items) ? wallData.items : [];
-      const post = posts.find(item =>
-        String(item.text || "").toLowerCase().includes(VK_MENU_MARKER)
-      );
+      // Accept the legacy marker or a wall post whose heading is "МЕНЮ" / "ТОВАРЫ".
+      // VK wall posts do not expose a separate title field, so inspect the first non-empty line.
+      const post = posts.find(item => {
+        const text = String(item.text || "").trim();
+        const normalizedText = normalizeMenuText(text);
+        if (normalizedText.includes(normalizeMenuText(VK_MENU_MARKER))) return true;
+        const firstLine = text.split(/\\r?\\n/).map(line => line.trim()).find(Boolean) || "";
+        const heading = normalizeMenuText(firstLine).replace(/^#/, "");
+        return heading === "меню" || heading === "товары" ||
+          heading.startsWith("меню") || heading.startsWith("товары");
+      });
       if (post) {
         parsed = parseVkMenu(post.text);
         if (parsed.length) {
@@ -251,7 +259,7 @@ async function syncMenuFromVk() {
         console.log("Menu synchronized from VK " + source, groupId);
       }
     } else {
-      console.warn("No readable VK Market products or marked wall menu; existing menu preserved.");
+      console.warn("No readable VK Market products or wall post headed МЕНЮ/ТОВАРЫ; existing menu preserved.");
     }
 
     // Synchronize community identity and visual elements when provided by VK.
