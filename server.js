@@ -12,7 +12,6 @@ const VK_SERVICE_KEY = process.env.VK_SERVICE_KEY;
 const VK_MARKET_TOKEN = process.env.VK_MARKET_TOKEN;
 const VK_GROUP_TOKEN = process.env.VK_GROUP_TOKEN;
 const VK_GROUP_DOMAIN = process.env.VK_GROUP_DOMAIN || "shashlychok50";
-const VK_MENU_MARKER = (process.env.VK_MENU_MARKER || "#менюшашлычок").toLowerCase();
 let lastVkMenuSync = 0;
 let vkMenuSyncInProgress = false;
 
@@ -29,7 +28,7 @@ function parseVkMenu(text) {
 
   for (const rawLine of String(text || "").split(/\r?\n/)) {
     const line = rawLine.trim();
-    if (!line || line.toLowerCase().includes(VK_MENU_MARKER)) continue;
+    if (!line) continue;
 
     const bracketCategory = line.match(/^\[([^\]]+)\]$/);
     const colonCategory = line.match(/^([^:=|—–-]{2,50}):$/);
@@ -172,7 +171,7 @@ async function syncMenuFromVk() {
       parsed = Array.from(byCategory.values()).filter(category => category.items.length);
       if (parsed.length) source = "market";
     } catch (error) {
-      console.warn("VK Market sync unavailable; trying marked wall post:", error.message);
+      console.warn("VK Market sync unavailable; searching wall posts containing only the word ТОВАРЫ:", error.message);
     }
 
     // Backward-compatible fallback for communities that still keep a text menu on the wall.
@@ -183,21 +182,15 @@ async function syncMenuFromVk() {
         filter: "owner"
       });
       const posts = Array.isArray(wallData?.items) ? wallData.items : [];
-      // Search all recent wall posts for the marker or МЕНЮ / ТОВАРЫ.
-      // A newer matching post may be image-only, so try every candidate until item lines parse.
+      // Search only posts containing the exact standalone word "ТОВАРЫ".
+      // Ignore posts that mention МЕНЮ or #менюшашлычок without ТОВАРЫ.
       const candidates = posts
         .map(item => {
           const text = String(item.text || "").trim();
-          const normalizedText = normalizeMenuText(text);
-          const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean) || "";
-          const heading = normalizeMenuText(firstLine).replace(/^#/, "");
-          const markerMatch = normalizedText.includes(normalizeMenuText(VK_MENU_MARKER));
-          const headingMatch = heading.includes("меню") || heading.includes("товары");
-          const bodyMatch = /меню|товар/i.test(text);
-          return { item, markerMatch, headingMatch, bodyMatch };
+          const товарыMatch = /(?<![\\p{L}\\p{N}])товары(?![\\p{L}\\p{N}])/iu.test(text);
+          return { item, товарыMatch };
         })
-        .filter(candidate => candidate.markerMatch || candidate.headingMatch || candidate.bodyMatch)
-        .sort((a, b) => Number(b.markerMatch || b.headingMatch) - Number(a.markerMatch || a.headingMatch));
+        .filter(candidate => candidate.товарыMatch);
 
       for (const candidate of candidates) {
         const post = candidate.item;
