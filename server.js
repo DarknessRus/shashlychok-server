@@ -449,7 +449,7 @@ let communityContentCache = { at: 0, data: null };
 let communityContentLoading = false;
 app.get("/api/community", async (req, res) => {
   res.set("Cache-Control", "public, max-age=60");
-  if (communityContentCache.data && Date.now() - communityContentCache.at < 5 * 60 * 1000) {
+  if (!req.query.refresh && communityContentCache.data && Date.now() - communityContentCache.at < 5 * 60 * 1000) {
     return res.json({ ...communityContentCache.data, cached: true });
   }
   if (communityContentLoading) {
