@@ -183,41 +183,60 @@ async function syncMenuFromVk() {
         filter: "owner"
       });
       const posts = Array.isArray(wallData?.items) ? wallData.items : [];
-      // Accept the legacy marker or a wall post whose heading is "МЕНЮ" / "ТОВАРЫ".
-      // VK wall posts do not expose a separate title field, so inspect the first non-empty line.
-      const post = posts.find(item => {
-        const text = String(item.text || "").trim();
-        const normalizedText = normalizeMenuText(text);
-        if (normalizedText.includes(normalizeMenuText(VK_MENU_MARKER))) return true;
-        const firstLine = text.split(/\\r?\\n/).map(line => line.trim()).find(Boolean) || "";
-        const heading = normalizeMenuText(firstLine).replace(/^#/, "");
-        return heading === "меню" || heading === "товары" ||
-          heading.startsWith("меню") || heading.startsWith("товары");
-      });
-      if (post) {
-        parsed = parseVkMenu(post.text);
-        if (parsed.length) {
-          const photoUrls = (post.attachments || [])
-            .filter(attachment => attachment.type === "photo" && attachment.photo)
-            .map(attachment => {
-              const sizes = attachment.photo.sizes || [];
-              const best = sizes.slice().sort((a, b) =>
-                (Number(b.width || 0) * Number(b.height || 0)) -
-                (Number(a.width || 0) * Number(a.height || 0))
-              )[0];
-              return best?.url || attachment.photo.photo_1280 ||
-                attachment.photo.photo_807 || attachment.photo.photo_604 || "";
-            })
-            .filter(Boolean);
-          const flatItems = parsed.flatMap(category => category.items);
-          if (photoUrls.length === flatItems.length) {
-            let photoIndex = 0;
-            for (const category of parsed) {
-              for (const item of category.items) item.photo = photoUrls[photoIndex++];
-            }
+      // Search all recent wall posts for the marker or МЕНЮ / ТОВАРЫ.
+      // A newer matching post may be image-only, so try every candidate until item lines parse.
+      const candidates = posts
+        .map(item => {
+          const text = String(item.text || "").trim();
+          const normalizedText = normalizeMenuText(text);
+          const firstLine = text.split(/\r?\n/).map(line => line.trim()).find(Boolean) || "";
+          const heading = normalizeMenuText(firstLine).replace(/^#/, "");
+          const markerMatch = normalizedText.includes(normalizeMenuText(VK_MENU_MARKER));
+          const headingMatch = heading.includes("меню") || heading.includes("товары");
+          const bodyMatch = /меню|товар/i.test(text);
+          return { item, markerMatch, headingMatch, bodyMatch };
+        })
+        .filter(candidate => candidate.markerMatch || candidate.headingMatch || candidate.bodyMatch)
+        .sort((a, b) => Number(b.markerMatch || b.headingMatch) - Number(a.markerMatch || a.headingMatch));
+
+      for (const candidate of candidates) {
+        const post = candidate.item;
+        const candidateMenu = parseVkMenu(post.text);
+        if (!candidateMenu.length) continue;
+        parsed = candidateMenu;
+        const photoUrls = (post.attachments || [])
+          .filter(attachment => attachment.type === "photo" && attachment.photo)
+          .map(attachment => {
+            const sizes = attachment.photo.sizes || [];
+            const best = sizes.slice().sort((a, b) =>
+              (Number(b.width || 0) * Number(b.height || 0)) -
+              (Number(a.width || 0) * Number(a.height || 0))
+            )[0];
+            return best?.url || attachment.photo.photo_1280 ||
+              attachment.photo.photo_807 || attachment.photo.photo_604 || "";
+          })
+          .filter(Boolean);
+        const flatItems = parsed.flatMap(category => category.items);
+        if (photoUrls.length === flatItems.length) {
+          let photoIndex = 0;
+          for (const category of parsed) {
+            for (const item of category.items) item.photo = photoUrls[photoIndex++];
           }
-          source = "wall";
         }
+        source = "wall";
+        console.log("Parsed VK wall menu post", { postId: post.id, itemCount: flatItems.length });
+        break;
+      }
+      if (!parsed.length) {
+        console.warn("VK wall search found no parseable menu text.", {
+          postsChecked: posts.length,
+          matchingPosts: candidates.length,
+          examples: candidates.slice(0, 5).map(candidate => ({
+            id: candidate.item.id,
+            textStart: String(candidate.item.text || "").slice(0, 100),
+            photos: (candidate.item.attachments || []).filter(a => a.type === "photo").length
+          }))
+        });
       }
     }
 
@@ -259,7 +278,7 @@ async function syncMenuFromVk() {
         console.log("Menu synchronized from VK " + source, groupId);
       }
     } else {
-      console.warn("No readable VK Market products or wall post headed МЕНЮ/ТОВАРЫ; existing menu preserved.");
+      console.warn("No readable VK Market products or parseable wall menu text; existing menu preserved.");
     }
 
     // Synchronize community identity and visual elements when provided by VK.
