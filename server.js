@@ -445,7 +445,6 @@ app.post("/api/auth/vk/exchange", async (req, res) => {
 
 
 // Public VK community content cache. This is separate from ordering/menu sync.
-let communityContentCache = { at: 0, data: null };
 let communityContentLoading = false;
 app.get("/api/community", async (req, res) => {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -515,7 +514,6 @@ app.get("/api/community", async (req, res) => {
       },
       updatedAt: new Date().toISOString()
     };
-    communityContentCache = { at: Date.now(), data };
     return res.json(data);
   } catch (error) {
     console.error("VK community content sync failed:", error.message || error);
