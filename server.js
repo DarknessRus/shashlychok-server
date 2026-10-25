@@ -169,7 +169,8 @@ async function syncMenuFromVk() {
       }
 
       parsed = Array.from(byCategory.values()).filter(category => category.items.length);
-      if (parsed.length) source = "market";
+      // A successful empty Market response is authoritative too: it means the catalog was cleared.
+      source = "market";
     } catch (error) {
       console.warn("VK Market sync unavailable; searching wall posts containing only the word ТОВАРЫ:", error.message);
     }
@@ -237,7 +238,7 @@ async function syncMenuFromVk() {
     const oldCategories = Array.isArray(config.categories) ? config.categories : [];
 
     // Do not erase the existing menu if VK returns no products or an API permission error.
-    if (parsed.length) {
+    if (parsed.length || source === "market") {
       const nextCategories = parsed.map(category => {
         const oldCategory = oldCategories.find(c =>
           normalizeMenuText(c.name) === normalizeMenuText(category.name)
