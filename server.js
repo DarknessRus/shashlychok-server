@@ -172,7 +172,7 @@ async function syncMenuFromVk() {
       // A successful empty Market response is authoritative too: it means the catalog was cleared.
       source = "market";
     } catch (error) {
-      console.warn("VK Market sync unavailable; searching wall posts containing only the word ТОВАРЫ:", error.message);
+      console.warn("VK Market sync unavailable; searching wall posts marked МЕНЮ or ТОВАРЫ:", error.message);
     }
 
     // Backward-compatible fallback for communities that still keep a text menu on the wall.
@@ -183,12 +183,12 @@ async function syncMenuFromVk() {
         filter: "owner"
       });
       const posts = Array.isArray(wallData?.items) ? wallData.items : [];
-      // Search only posts containing the exact standalone word "ТОВАРЫ".
-      // Ignore posts that mention МЕНЮ or #менюшашлычок without ТОВАРЫ.
+      // Accept either of the two explicit menu post headings requested by the owner.
+      // Match standalone words to avoid unrelated hashtags or words.
       const candidates = posts
         .map(item => {
           const text = String(item.text || "").trim();
-          const товарыMatch = /(?<![\\p{L}\\p{N}])товары(?![\\p{L}\\p{N}])/iu.test(text);
+          const товарыMatch = /(?<![\\p{L}\\p{N}])(?:меню|товары)(?![\\p{L}\\p{N}])/iu.test(text);
           return { item, товарыMatch };
         })
         .filter(candidate => candidate.товарыMatch);
