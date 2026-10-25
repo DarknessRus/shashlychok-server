@@ -136,8 +136,8 @@ async function syncMenuFromVk() {
           if (Number.isFinite(amount) && amount > 0) price = Math.round(amount / 1000);
         }
         if (!(price > 0)) {
-          console.warn("VK market item skipped because its price could not be read:", name);
-          continue;
+          console.warn("VK market item has no readable price; syncing it with price 0:", name);
+          price = 0;
         }
 
         const categoryName = String(product.category?.name || "Меню").trim() || "Меню";
